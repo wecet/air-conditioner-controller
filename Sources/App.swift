@@ -12,16 +12,24 @@ final class Controller: ObservableObject {
     @Published var connected = false
     @Published var message = ""
     @Published var address = UserDefaults.standard.string(forKey: "discoveryAddress") ?? "255.255.255.255"
+    @Published private(set) var offTimer = OffTimer()
+    @Published private(set) var countdownNow = Date()
+    @Published private(set) var timerNotice = ""
+    private var countdownTicker: Timer?
     private let client = GreeClient()
     private let queue = DispatchQueue(label: "gree.network")
     private var timer: Timer?
     init() {
         let production = CommandLine.arguments.contains("--production")
         changeMode(production ? .production : .preview)
+        let ticker = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tickOffTimer() }
+        countdownTicker = ticker
+        RunLoop.main.add(ticker, forMode: .common)
         timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in self?.refresh() }
     }
     func changeMode(_ next: OperatingMode) {
         guard !busy else { return }
+        cancelOffTimer()
         mode = next; selected = nil; devices = []; connected = false
         // All client access stays serialized with network operations.
         queue.async { self.client.clearSession() }
@@ -36,6 +44,7 @@ final class Controller: ObservableObject {
     var canControl: Bool { !busy && (mode == .preview || connected) }
     func scan() {
         guard mode == .production, !busy else { return }
+        cancelOffTimer()
         busy = true; connected = false; selected = nil; state = [:]; devices = []
         message = "Looking for a compatible AC…"
         let host = address.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -53,6 +62,7 @@ final class Controller: ObservableObject {
     }
     func select(_ device: Device) {
         guard mode == .production, !busy else { return }
+        cancelOffTimer()
         selected = device; state = [:]; connected = false
         refresh()
     }
@@ -66,6 +76,7 @@ final class Controller: ObservableObject {
     }
     func set(_ values: [String: Int]) {
         guard canControl else { return }
+        if values["Pow"] == 0 { cancelOffTimer() }
         if mode == .preview { state.merge(values) { _, new in new }; return }
         guard let device = selected else { return }
         busy = true
@@ -78,8 +89,51 @@ final class Controller: ObservableObject {
             } catch { self.fail(error) }
         }
     }
+    func startOffTimer(amount: Int, hours: Bool) {
+        guard canControl, state["Pow"] == 1, (1...1440).contains(amount) else { return }
+        let seconds = Double(amount) * (hours ? 3600 : 60)
+        guard seconds <= 86400 else { return }
+        offTimer.start(seconds: seconds)
+        countdownNow = Date()
+        timerNotice = ""
+    }
+    func cancelOffTimer() {
+        offTimer.cancel()
+        timerNotice = ""
+    }
+    private func tickOffTimer() {
+        countdownNow = Date()
+        guard offTimer.isDue(at: countdownNow), !busy else { return }
+        offTimer.cancel()
+        if mode == .preview {
+            state["Pow"] = 0
+            timerNotice = "Timer finished · preview AC switched off"
+            return
+        }
+        guard let device = selected else {
+            timerNotice = "Timer failed · no AC selected"
+            return
+        }
+        busy = true
+        timerNotice = "Timer finished · switching AC off…"
+        queue.async {
+            do {
+                try self.client.command(device, values: ["Pow": 0])
+                let status = try self.client.status(device)
+                DispatchQueue.main.async {
+                    self.state = status; self.connected = true; self.busy = false
+                    self.timerNotice = status["Pow"] == 0 ? "Timer finished · AC confirmed off" : "Timer failed · AC still reports on"
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.busy = false; self.connected = false
+                    self.timerNotice = "Timer failed · off was not confirmed. " + error.localizedDescription
+                }
+            }
+        }
+    }
     private func apply(_ status: [String: Int], device: Device) {
-        DispatchQueue.main.async { self.state = status; self.connected = true; self.busy = false; self.message = "Connected · \(device.host)" }
+        DispatchQueue.main.async { self.state = status; if status["Pow"] == 0 { self.offTimer.cancel() }; self.connected = true; self.busy = false; self.message = "Connected · \(device.host)" }
     }
     private func fail(_ error: Error) {
         DispatchQueue.main.async { self.busy = false; self.connected = false; self.message = error.localizedDescription }
@@ -106,6 +160,8 @@ struct GreeBar: App {
 struct Panel: View {
     @ObservedObject var model: Controller
     @State private var temperature = 24.0
+    @State private var timerAmount = 30
+    @State private var timerHours = false
     private let blue = Color(red: 0.3, green: 0.65, blue: 1)
     var body: some View {
         VStack(spacing: 18) {
@@ -143,6 +199,7 @@ struct Panel: View {
                 control("Sleep", icon: "moon", key: "SwhSlp", choices: [(0,"Off"),(1,"On")])
                 control("Airflow", icon: "wind", key: "SwUpDn", choices: [(0,"Default"),(1,"Swing"),(2,"Top"),(3,"Upper"),(4,"Middle"),(5,"Lower"),(6,"Bottom")])
             }
+            offTimerPanel
             Text(model.message).font(.system(size: 11)).foregroundStyle(model.mode == .preview || model.connected ? Color.white.opacity(0.6) : Color.orange).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
             if model.mode == .production {
                 VStack(alignment: .leading, spacing: 10) {
@@ -170,6 +227,38 @@ struct Panel: View {
             .background(LinearGradient(colors: [Color(red: 0.1, green: 0.20, blue: 0.36), Color(red: 0.035, green: 0.055, blue: 0.10)], startPoint: .topLeading, endPoint: .bottomTrailing))
             .onChange(of: model.state["SetTem"]) { _, value in temperature = Double(value ?? 24) }
     }
+    private var offTimerPanel: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Label("Off timer", systemImage: "timer").font(.system(size: 12, weight: .semibold))
+                Spacer()
+                if let countdown = model.offTimer.countdown(at: model.countdownNow) {
+                    Text(countdown).monospacedDigit().font(.system(size: 16, weight: .medium)).foregroundStyle(blue)
+                    Button("Cancel") { model.cancelOffTimer() }.font(.system(size: 11))
+                }
+            }
+            if model.offTimer.deadline == nil {
+                HStack(spacing: 8) {
+                    Text("Off after").font(.system(size: 11))
+                    TextField("Amount", value: $timerAmount, format: .number).frame(width: 48).textFieldStyle(.roundedBorder)
+                    Picker("Unit", selection: $timerHours) {
+                        Text("minutes").tag(false)
+                        Text("hours").tag(true)
+                    }.labelsHidden().frame(width: 100)
+                    Spacer(minLength: 0)
+                    Button("Start") { model.startOffTimer(amount: timerAmount, hours: timerHours) }
+                        .disabled(!model.canControl || model.state["Pow"] != 1 || timerAmount < 1 || timerAmount > (timerHours ? 24 : 1440))
+                }
+            }
+            if !model.timerNotice.isEmpty {
+                Text(model.timerNotice).font(.system(size: 10)).foregroundStyle(model.timerNotice.hasPrefix("Timer failed") ? Color.orange : blue)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if model.mode == .production {
+                Text("App timer · keep this Mac awake and GreeBar running.").font(.system(size: 10)).foregroundStyle(.white.opacity(0.5))
+            }
+        }.padding(12).background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+    }
     private var roomLabel: String {
         if let sensor = model.state["TemSen"], (40...100).contains(sensor) { return "Room \(sensor - 40)°C" }
         return model.busy ? "Connecting…" : "Not connected"
@@ -178,7 +267,8 @@ struct Panel: View {
     private var illustration: some View {
         ZStack {
             Ellipse().fill(blue.opacity(model.state["Pow"] == 1 ? 0.2 : 0.02)).frame(width: 190, height: 55).blur(radius: 20).offset(y: 15)
-            Image(systemName: "wind").font(.system(size: 38, weight: .ultraLight)).foregroundStyle(blue.opacity(model.state["Pow"] == 1 ? 0.4 : 0)).offset(y: 35)
+            AirflowAnimation(active: model.state["Pow"] == 1 && (model.mode == .preview || model.connected),
+                             speed: model.state["WdSpd"] ?? 0, color: blue)
             VStack(spacing: 12) {
                 HStack { Spacer(); Text(model.state["SetTem"].map { "\($0)°" } ?? "—").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundStyle(.blue) }
                 RoundedRectangle(cornerRadius: 3).fill(.black.opacity(0.5)).frame(height: 5)
@@ -191,14 +281,103 @@ struct Panel: View {
         }.buttonStyle(.plain).disabled(!available("SetTem"))
     }
     private func control(_ title: String, icon: String, key: String, choices: [(Int, String)]) -> some View {
-        Menu {
-            ForEach(choices, id: \.0) { value, label in Button(label) { model.set([key: value]) } }
-        } label: {
+        SettingControl(title: title, icon: icon, choices: choices, value: model.state[key],
+                       enabled: available(key), color: blue) { model.set([key: $0]) }
+    }
+}
+
+struct SettingControl: View {
+    let title: String
+    let icon: String
+    let choices: [(Int, String)]
+    let value: Int?
+    let enabled: Bool
+    let color: Color
+    let select: (Int) -> Void
+    @State private var expanded = false
+    @State private var hoveredOption: Int?
+
+    var body: some View {
+        Button { expanded.toggle() } label: {
             VStack(alignment: .leading, spacing: 8) {
-                Image(systemName: icon).font(.system(size: 21)).foregroundStyle(blue)
-                Text(title).foregroundStyle(.white.opacity(0.5))
-                Text(choices.first { $0.0 == model.state[key] }?.1 ?? "—")
-            }.font(.system(size: 10)).frame(maxWidth: .infinity, alignment: .leading).padding(10).background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
-        }.menuStyle(.borderlessButton).disabled(!available(key))
+                HStack {
+                    Image(systemName: icon).font(.system(size: 20)).foregroundStyle(color)
+                    Spacer(minLength: 2)
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(.white.opacity(0.45))
+                }
+                Text(title).font(.system(size: 10)).foregroundStyle(.white.opacity(0.55))
+                Text(currentSetting).font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.8)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                .background(color.opacity(value == nil ? 0.03 : 0.10), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(color.opacity(value == nil ? 0.08 : 0.25), lineWidth: 1))
+                .contentShape(RoundedRectangle(cornerRadius: 12))
+        }.buttonStyle(.plain).disabled(!enabled)
+            .accessibilityLabel(title).accessibilityValue(currentSetting)
+            .popover(isPresented: $expanded) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).font(.headline).padding(.horizontal, 8).padding(.bottom, 5)
+                    ForEach(choices, id: \.0) { option, label in
+                        Button {
+                            select(option)
+                            expanded = false
+                        } label: {
+                            HStack {
+                                Text(label)
+                                Spacer()
+                                Image(systemName: "checkmark").opacity(value == option ? 1 : 0)
+                            }.padding(8).frame(width: 150)
+                                .background(color.opacity(hoveredOption == option ? 0.25 : (value == option ? 0.15 : 0)), in: RoundedRectangle(cornerRadius: 6))
+                                .contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                            .onHover { hovering in
+                                if hovering { hoveredOption = option }
+                                else if hoveredOption == option { hoveredOption = nil }
+                            }
+                    }
+                }.padding(10)
+                    .onDisappear { hoveredOption = nil }.preferredColorScheme(.dark)
+            }
+    }
+    private var currentSetting: String {
+        guard let value else { return "—" }
+        return choices.first { $0.0 == value }?.1 ?? "Other"
+    }
+}
+
+struct AirflowAnimation: View {
+    let active: Bool
+    let speed: Int
+    let color: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !active || reduceMotion)) { timeline in
+            Canvas { context, size in
+                drawAirflow(context: &context, size: size, date: timeline.date)
+            }
+        }.allowsHitTesting(false).accessibilityHidden(true)
+    }
+
+    private func drawAirflow(context: inout GraphicsContext, size: CGSize, date: Date) {
+        guard active else { return }
+        let duration = max(1.1, 2.8 - Double(speed) * 0.25)
+        let time = reduceMotion ? 0.8 : date.timeIntervalSinceReferenceDate / duration
+        // Stagger short curved wisps from the outlet, fading as they travel down.
+        for lane in 0..<7 {
+            let spread = CGFloat(lane - 3)
+            for pulse in 0..<2 {
+                let phase = (time + Double(pulse) / 2 + Double(lane) * 0.07).truncatingRemainder(dividingBy: 1)
+                let progress = CGFloat(phase)
+                let x = size.width / 2 + spread * 15
+                let y: CGFloat = 46 + progress * 48
+                var path = Path()
+                path.move(to: CGPoint(x: x + spread * progress * 4, y: y))
+                path.addQuadCurve(to: CGPoint(x: x + spread * (progress + 0.3) * 4, y: y + 12),
+                                  control: CGPoint(x: x + spread * progress * 4 + 2, y: y + 6))
+                context.stroke(path, with: .color(color.opacity(sin(phase * .pi) * 0.45)),
+                               style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+            }
+        }
     }
 }

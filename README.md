@@ -25,6 +25,8 @@ If the compiler is missing, run `xcode-select --install`, complete Apple's insta
 
 Preview starts with a simulated powered-on AC at 24°C and a room reading of 25°C. Power, temperature, mode, fan, sleep, eco, and vertical airflow controls update only this in-memory state. **Preview never discovers, binds, polls, or commands an AC.** The menu bar says Demo, and the panel identifies the simulated device.
 
+The AC illustration emits subtle moving airflow while powered on. The motion responds to fan speed, stops when off or disconnected, and respects macOS Reduce Motion. Mode, Fan, Sleep, and Airflow cards display their current value; click one to choose a setting, with a checkmark identifying the current option.
+
 ## Production mode
 
 Switch to Production in the panel, or start with `./start.sh --production`. Production begins disconnected and does not send anything until you click **Find AC**.
@@ -39,6 +41,14 @@ Production supports Gree's **AES-128-ECB / PKCS7 local protocol (v1)** on UDP po
 The panel polls the selected device every 10 seconds. A command requires an acknowledgement followed by a fresh status read; it does not optimistically display a successful change. Connection failures disable controls. The last confirmed values may remain visible after a connection failure. Use Refresh or Find AC to retry. Mode and device changes are disabled while a network operation is running.
 
 The temperature setpoint is 16–30°C. The room reading uses `TemSen - 40` when a plausible reading is returned. Sleep, eco, airflow, and fan-speed support vary by model; a reported protocol field does not guarantee every listed setting is supported.
+
+## Off timer
+
+Enter a number of minutes or hours under **Off timer**, then Start. The AC must be on; durations are limited to 1 minute–24 hours. The remaining time updates every second, and Cancel removes the timer. Preview switches off the simulated AC when the countdown expires. Production sends a power-off command to the selected AC, then reads status to confirm it is off. Failures are shown explicitly; they are not automatically retried.
+
+This is an **app-managed timer**, not a timer saved on the AC. Keep the Mac awake, GreeBar running, and the AC reachable. Timers are not restored after quitting or rebuilding. A deadline that passes during sleep is handled after the Mac wakes; this does not guarantee shutoff at the scheduled time. The app does not prevent sleep. Timers configured with a physical remote or another app are not detected.
+
+Switching modes, selecting/scanning for another device, or manually switching off cancels the timer. A confirmed off status also cancels it. If an operation is already in progress when the deadline arrives, power-off waits until that operation finishes.
 
 ## Development and documentation
 

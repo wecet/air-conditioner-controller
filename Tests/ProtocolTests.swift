@@ -19,6 +19,19 @@ struct ProtocolTests {
         do { _ = try client.crypt(plaintext, key: "short", decrypt: false); fatalError("Invalid key accepted") } catch {}
         do { _ = try client.discover(host: "invalid"); fatalError("Invalid address accepted") } catch {}
         do { _ = try client.decode(Data("{}".utf8), key: key); fatalError("Invalid envelope accepted") } catch {}
-        print("Protocol checks passed")
+        let now = Date(timeIntervalSince1970: 1000)
+        var timer = OffTimer()
+        timer.start(seconds: 90, now: now)
+        precondition(timer.countdown(at: now) == "01:30")
+        precondition(!timer.isDue(at: now.addingTimeInterval(89)))
+        precondition(timer.isDue(at: now.addingTimeInterval(90)))
+        precondition(timer.countdown(at: now.addingTimeInterval(120)) == "00:00")
+        timer.start(seconds: 3601, now: now)
+        precondition(timer.countdown(at: now) == "1:00:01")
+        timer.cancel()
+        precondition(timer.deadline == nil && !timer.isDue(at: now))
+        timer.start(seconds: -1, now: now)
+        precondition(timer.deadline == nil)
+        print("Protocol and countdown checks passed")
     }
 }

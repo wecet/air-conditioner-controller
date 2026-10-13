@@ -25,7 +25,7 @@ echo 'Building GreeBar…'
 swiftc -swift-version 5 -O -target "$(uname -m)-apple-macosx14.0" \
   -module-cache-path "$ROOT/build/ModuleCache" \
   -import-objc-header "$ROOT/Sources/Crypto.h" \
-  "$ROOT/Sources/GreeClient.swift" "$ROOT/Sources/App.swift" \
+  "$ROOT/Sources/OffTimer.swift" "$ROOT/Sources/GreeClient.swift" "$ROOT/Sources/App.swift" \
   -o "$BUILD/Contents/MacOS/GreeBar" -framework SwiftUI -framework AppKit
 cp "$ROOT/Info.plist" "$BUILD/Contents/Info.plist"
 plutil -lint "$BUILD/Contents/Info.plist"
