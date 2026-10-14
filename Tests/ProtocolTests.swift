@@ -32,6 +32,19 @@ struct ProtocolTests {
         precondition(timer.deadline == nil && !timer.isDue(at: now))
         timer.start(seconds: -1, now: now)
         precondition(timer.deadline == nil)
-        print("Protocol and countdown checks passed")
+        let profiles = (1...5).map { AnimationProfile(mode: 1, fan: $0, swing: 1, sleep: false) }
+        for index in 1..<profiles.count { precondition(profiles[index].fanDuration < profiles[index - 1].fanDuration) }
+        let swing = AnimationProfile(mode: 4, fan: 5, swing: 1, sleep: true)
+        precondition(swing.angle(at: 0) != swing.angle(at: 1))
+        precondition(swing.opacity < profiles[0].opacity)
+        let angles = (2...6).map { AnimationProfile(mode: 1, fan: 1, swing: $0, sleep: false).fixedAngle }
+        precondition(Set(angles).count == 5)
+        for position in 2...6 {
+            let fixed = AnimationProfile(mode: 1, fan: 1, swing: position, sleep: false)
+            precondition(fixed.angle(at: 0) == fixed.angle(at: 10))
+        }
+        let symbols = (0...4).map { AnimationProfile(mode: $0, fan: 0, swing: 0, sleep: false).modeSymbol }
+        precondition(Set(symbols).count == 5)
+        print("Protocol, countdown, and animation profile checks passed")
     }
 }

@@ -6,6 +6,7 @@
 | --- | --- |
 | `Sources/App.swift` | SwiftUI menu bar app, panel, mode selection, state and command orchestration |
 | `Sources/GreeClient.swift` | UDP discovery, binding, status, commands, response validation, AES v1 encoding |
+| `Sources/AnimationProfile.swift` | Independent Mode/Fan/Swing/Sleep attributes composed by the Canvas illustration |
 | `Sources/OffTimer.swift` | Deadline calculation and countdown formatting |
 | `Sources/Crypto.h` | Bridge to Apple's CommonCrypto |
 | `Info.plist` | App identity, minimum OS, menu bar-only lifecycle, network usage description |
@@ -41,3 +42,7 @@ AES-GCM/v2 and infrared bridge integrations need separate protocol work. Device 
 ## App-managed off timer
 
 The controller uses a one-second common-run-loop timer to update a wall-clock deadline. Production expiration sends one power-off command and confirms status; it can attempt this even if a preceding poll marked the device disconnected. It waits for any active network operation to finish. Failures remain visible and are not retried. Preview expiration only updates simulated power. The timer is bound to the current mode/device by cancelling on mode change, discovery, or selection; it is also cancelled on manual off or confirmed off status. No device-side schedule is created or read. Deadlines and countdown formatting are checked in `Tests/ProtocolTests.swift`.
+
+## Combined setting visuals
+
+`AnimationProfile` translates protocol settings into independent mode symbols, fan durations/density, fixed or oscillating blade angles, and sleep brightness. The Canvas applies four drawing passes (mode particles, fan flow, swing blade, sleep badge) to a single timeline. Swing also steers mode particles and fan flow; sleep lowers their opacity without hiding the fan level or changing device settings. Auto fan uses a bounded phase variation to keep motion smooth over long uptime. Reduce Motion pauses updates and draws a static frame. The illustration has no hit targets and adds no network calls.

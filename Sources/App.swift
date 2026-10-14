@@ -197,7 +197,7 @@ struct Panel: View {
                 control("Mode", icon: "snowflake", key: "Mod", choices: [(0,"Auto"),(1,"Cool"),(2,"Dry"),(3,"Fan"),(4,"Heat")])
                 control("Fan", icon: "fan", key: "WdSpd", choices: [(0,"Auto"),(1,"Low"),(2,"Med-low"),(3,"Medium"),(4,"Med-high"),(5,"High")])
                 control("Sleep", icon: "moon", key: "SwhSlp", choices: [(0,"Off"),(1,"On")])
-                control("Airflow", icon: "wind", key: "SwUpDn", choices: [(0,"Default"),(1,"Swing"),(2,"Top"),(3,"Upper"),(4,"Middle"),(5,"Lower"),(6,"Bottom")])
+                control("Swing", icon: "wind", key: "SwUpDn", choices: [(0,"Default"),(1,"Swing"),(2,"Top"),(3,"Upper"),(4,"Middle"),(5,"Lower"),(6,"Bottom")])
             }
             offTimerPanel
             Text(model.message).font(.system(size: 11)).foregroundStyle(model.mode == .preview || model.connected ? Color.white.opacity(0.6) : Color.orange).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
@@ -264,13 +264,26 @@ struct Panel: View {
         return model.busy ? "Connecting…" : "Not connected"
     }
     private func available(_ key: String) -> Bool { model.canControl && model.state[key] != nil }
+    private var animationProfile: AnimationProfile {
+        AnimationProfile(mode: model.state["Mod"] ?? 0, fan: model.state["WdSpd"] ?? 0,
+                         swing: model.state["SwUpDn"] ?? 0, sleep: model.state["SwhSlp"] == 1)
+    }
+    private var climateColor: Color {
+        switch animationProfile.mode {
+        case 1: return blue
+        case 2: return .mint
+        case 3: return Color(red: 0.75, green: 0.87, blue: 0.98)
+        case 4: return Color(red: 1, green: 0.30, blue: 0.22)
+        default: return .purple
+        }
+    }
     private var illustration: some View {
         ZStack {
-            Ellipse().fill(blue.opacity(model.state["Pow"] == 1 ? 0.2 : 0.02)).frame(width: 190, height: 55).blur(radius: 20).offset(y: 15)
+            Ellipse().fill(climateColor.opacity(model.state["Pow"] == 1 ? (animationProfile.sleep ? 0.08 : 0.2) : 0.02)).frame(width: 190, height: 55).blur(radius: 20).offset(y: 15)
             AirflowAnimation(active: model.state["Pow"] == 1 && (model.mode == .preview || model.connected),
-                             speed: model.state["WdSpd"] ?? 0, color: blue)
+                             profile: animationProfile, color: climateColor)
             VStack(spacing: 12) {
-                HStack { Spacer(); Text(model.state["SetTem"].map { "\($0)°" } ?? "—").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundStyle(.blue) }
+                HStack { Spacer(); Text(model.state["SetTem"].map { "\($0)°" } ?? "—").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundStyle(climateColor) }
                 RoundedRectangle(cornerRadius: 3).fill(.black.opacity(0.5)).frame(height: 5)
             }.padding(10).frame(width: 155).background(LinearGradient(colors: [.white, Color(white: 0.7)], startPoint: .top, endPoint: .bottom), in: RoundedRectangle(cornerRadius: 12)).shadow(radius: 8, y: 8).offset(y: -15)
         }
@@ -347,37 +360,91 @@ struct SettingControl: View {
 
 struct AirflowAnimation: View {
     let active: Bool
-    let speed: Int
+    let profile: AnimationProfile
     let color: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !active || reduceMotion)) { timeline in
             Canvas { context, size in
-                drawAirflow(context: &context, size: size, date: timeline.date)
+                guard active else { return }
+                let time = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+                drawMode(context: &context, size: size, time: time)
+                drawFan(context: &context, size: size, time: time)
+                drawSwing(context: &context, size: size, time: time)
+                drawSleep(context: &context, size: size, time: time)
             }
         }.allowsHitTesting(false).accessibilityHidden(true)
     }
 
-    private func drawAirflow(context: inout GraphicsContext, size: CGSize, date: Date) {
-        guard active else { return }
-        let duration = max(1.1, 2.8 - Double(speed) * 0.25)
-        let time = reduceMotion ? 0.8 : date.timeIntervalSinceReferenceDate / duration
-        // Stagger short curved wisps from the outlet, fading as they travel down.
+    // Mode: tinted air with its own particle shape and motion.
+    private func drawMode(context: inout GraphicsContext, size: CGSize, time: Double) {
+        let pulse = reduceMotion ? 0.7 : 0.65 + sin(time * 1.8) * 0.2
+        var iconContext = context
+        iconContext.opacity = pulse * (profile.sleep ? 0.45 : 1)
+        iconContext.translateBy(x: size.width / 2 - 104, y: 26)
+        if profile.mode == 3 && !reduceMotion { iconContext.rotate(by: .radians(time * 2)) }
+        iconContext.draw(Image(systemName: profile.modeSymbol).resizable(), in: CGRect(x: -9, y: -9, width: 18, height: 18))
+        for index in 0..<4 {
+            let phase = reduceMotion ? 0.45 : (time / 3 + Double(index) / 4).truncatingRemainder(dividingBy: 1)
+            let x = size.width / 2 + CGFloat(index - 2) * 26 + CGFloat(profile.angle(at: time) * phase * 50)
+            let y = 50 + CGFloat(phase) * 42
+            var particle = Path()
+            switch profile.mode {
+            case 1: // Small crystalline sparks.
+                particle.move(to: CGPoint(x: x - 3, y: y)); particle.addLine(to: CGPoint(x: x + 3, y: y))
+                particle.move(to: CGPoint(x: x, y: y - 3)); particle.addLine(to: CGPoint(x: x, y: y + 3))
+            case 2: // Falling moisture droplets.
+                particle.addEllipse(in: CGRect(x: x, y: y, width: 2.5, height: 5))
+            case 4: // Warm ripples.
+                particle.move(to: CGPoint(x: x - 4, y: y))
+                particle.addQuadCurve(to: CGPoint(x: x + 4, y: y + 4), control: CGPoint(x: x + 2, y: y - 4))
+            case 3: continue // Fan mode keeps the air clean, with the rotating fan badge.
+            default: // Auto has floating circular motes.
+                particle.addEllipse(in: CGRect(x: x, y: y, width: 3, height: 3))
+            }
+            context.stroke(particle, with: .color(color.opacity(sin(phase * .pi) * profile.opacity)), lineWidth: 1)
+        }
+    }
+
+    // Fan: flow speed, density, and stroke weight vary at every level.
+    private func drawFan(context: inout GraphicsContext, size: CGSize, time: Double) {
+        let automatic = profile.fan == 0 && !reduceMotion ? sin(time * 0.6) * 0.15 : 0
+        let flowTime = time / profile.fanDuration + automatic
+        let angle = profile.angle(at: time)
         for lane in 0..<7 {
             let spread = CGFloat(lane - 3)
-            for pulse in 0..<2 {
-                let phase = (time + Double(pulse) / 2 + Double(lane) * 0.07).truncatingRemainder(dividingBy: 1)
+            for pulse in 0..<profile.pulses {
+                let phase = reduceMotion ? 0.4 : (flowTime + Double(pulse) / Double(profile.pulses) + Double(lane) * 0.07).truncatingRemainder(dividingBy: 1)
                 let progress = CGFloat(phase)
-                let x = size.width / 2 + spread * 15
-                let y: CGFloat = 46 + progress * 48
+                let x = size.width / 2 + spread * 15 + CGFloat(angle) * progress * 55
+                let y: CGFloat = 46 + progress * 44
                 var path = Path()
-                path.move(to: CGPoint(x: x + spread * progress * 4, y: y))
-                path.addQuadCurve(to: CGPoint(x: x + spread * (progress + 0.3) * 4, y: y + 12),
-                                  control: CGPoint(x: x + spread * progress * 4 + 2, y: y + 6))
-                context.stroke(path, with: .color(color.opacity(sin(phase * .pi) * 0.45)),
-                               style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                path.move(to: CGPoint(x: x, y: y))
+                path.addQuadCurve(to: CGPoint(x: x + spread * 1.2 + CGFloat(angle) * 10, y: y + 10),
+                                  control: CGPoint(x: x + 2, y: y + 5))
+                context.stroke(path, with: .color(color.opacity(sin(phase * .pi) * profile.opacity)),
+                               style: StrokeStyle(lineWidth: 1 + Double(profile.fan) * 0.12, lineCap: .round))
             }
         }
+    }
+
+    // Swing: a visible blade pivots and also steers the combined airflow.
+    private func drawSwing(context: inout GraphicsContext, size: CGSize, time: Double) {
+        var blade = context
+        blade.translateBy(x: size.width / 2, y: 47)
+        blade.rotate(by: .radians(profile.angle(at: time) * 0.35))
+        var path = Path()
+        path.move(to: CGPoint(x: -52, y: 0)); path.addLine(to: CGPoint(x: 52, y: 0))
+        blade.stroke(path, with: .color(color.opacity(profile.sleep ? 0.35 : 0.7)),
+                     style: StrokeStyle(lineWidth: 2, lineCap: .round))
+    }
+
+    // Sleep: independent slow breathing moon/stars plus softer light and airflow.
+    private func drawSleep(context: inout GraphicsContext, size: CGSize, time: Double) {
+        guard profile.sleep else { return }
+        var night = context
+        night.opacity = reduceMotion ? 0.65 : 0.6 + sin(time * 0.7) * 0.2
+        night.draw(Image(systemName: "moon.stars.fill"), in: CGRect(x: size.width / 2 + 91, y: 16, width: 21, height: 21))
     }
 }

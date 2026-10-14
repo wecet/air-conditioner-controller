@@ -64,3 +64,24 @@ Run the protocol checks:
 These verify encryption against an independently checked AES vector, packet encoding/decoding, and invalid-key/address handling. They do not establish physical AC compatibility.
 
 Quit the app using **Quit** at the bottom of its panel. It does not automatically start at login. The build output and deployment directory are ignored by Git. To remove the local deployment, quit the app and delete `.local/GreeBar.app` in Finder.
+
+## Combined AC animation
+
+Four visual layers combine using the current settings. These illustrate settings, not measured airflow or automatic capability detection.
+
+| Setting | Visual contribution |
+| --- | --- |
+| Mode: Auto | Purple glow, floating motes, pulsing sparkle badge |
+| Mode: Cool | Blue airflow with crystalline sparks |
+| Mode: Dry | Mint airflow with falling droplet particles |
+| Mode: Fan | Pale airflow and rotating fan badge |
+| Mode: Heat | Red airflow with warm ripple particles |
+| Fan: Auto | Medium flow with gentle variation |
+| Fan: Low / Med-low / Medium / Med-high / High | Progressively faster airflow; higher levels add density and stronger strokes |
+| Swing: Default | Slightly angled fixed flow |
+| Swing: Swing | Oscillating blade and sweeping airflow |
+| Swing: Top / Upper / Middle / Lower / Bottom | Five distinct fixed blade and flow angles |
+| Sleep: Off | Normal brightness, no night layer |
+| Sleep: On | Softer glow and air, slow breathing moon-and-stars badge |
+
+For example, Heat + High + Swing + Sleep produces fast red ripples, sweeping air and blade motion, with softer lighting and the night badge. Power off or disconnection stops the visual effects. Reduce Motion displays static indicators while retaining colors, blade position, and sleep state. Production visuals use the last confirmed settings.
